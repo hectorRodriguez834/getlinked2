@@ -9,8 +9,8 @@ chmod +x cli getList getToken
 ```
 
 el cli te mostrara la siguiente pantalla para obtener los parametros deseados
-
-usuario_solicitante [practicanteIt] (obligatorio): /n
+```console
+usuario_solicitante [practicanteIt] (obligatorio):
 id_proyecto [omitir] (opcional):
 id_zona [omitir] (opcional):
 id_cliente [omitir] (opcional):
@@ -20,6 +20,7 @@ nombre_largo [omitir] (busqueda parcial, opcional):
 activo [omitir] (0|1, opcional):
 obra_terminada [omitir] (0|1, opcional):
 tipo_listado [omitir] (c|r|a, opcional):
+```
 
 alternativamete se puede invocar getList de la siguiente forma
 
