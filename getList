@@ -1,0 +1,42 @@
+#! /usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# Carga config (.env) y token con validación.
+[[ -f .env ]] || { echo "Error: falta archivo .env" >&2; exit 1; }
+# shellcheck disable=SC1091
+source .env
+[[ -f .token ]] || { echo "Error: falta archivo .token, ejecuta ./getToken primero" >&2; exit 1; }
+# shellcheck disable=SC1091
+source .token
+
+: "${linkListar:?linkListar no esta definido en .env}"
+: "${token:?token no esta definido en .token (re-ejecuta ./getToken)}"
+
+# ============ Params escalables ============
+# Env vars (minúsculas para no chocar con $USER del sistema) o args CLI.
+# Cualquier otro par clave=valor se reenvía tal cual a la API.
+user="${user:-${USER_INPUT:-${usuario_solicitante:-}}}"
+passthrough=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user|--usuario|--usuario_solicitante) user="${2:?Falta valor para $1}"; shift 2 ;;
+    --user=*|--usuario=*|--usuario_solicitante=*) user="${1#*=}"; shift ;;
+    usuario_solicitante=*) user="${1#*=}"; shift ;;
+    user=*) user="${1#*=}"; shift ;;
+    *=*) passthrough+=("$1"); shift ;;  # futuro parametro -> directo a la API
+    *) echo "Argumento desconocido: $1" >&2; exit 1 ;;
+  esac
+done
+# ============================================
+
+user="${user:-pIt1}"  # default si cli no lo pasó
+[[ -n "$user" ]] || { echo "Error: usuario_solicitante vacio" >&2; exit 1; }
+
+
+http "$linkListar" \
+  "Authorization: Bearer $token" \
+  "usuario_solicitante=$user" \
+  "${passthrough[@]}"

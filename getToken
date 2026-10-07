@@ -1,0 +1,15 @@
+#! /usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+source .env
+
+token=$(http "$linkToken" "client_id=$client_id" "client_secret=$client_secret" | jq -r '.data.access_token')
+
+if [[ -z "$token" || "$token" == "null" ]]; then
+  echo "Error: no se pudo obtener el token" >&2
+  exit 1
+fi
+
+echo "token=$token" > .token

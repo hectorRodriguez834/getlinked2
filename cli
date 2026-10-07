@@ -1,0 +1,203 @@
+#! /usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+usage() {
+  cat <<'EOF'
+Uso: ./cli [opciones] [clave=valor ...]
+
+Obtiene token via ./getToken y consulta via ./getList.
+
+Opciones:
+  --usuario_solicitante VAL | --usuario VAL | --user VAL
+  --id_proyecto VAL
+  --id_zona VAL
+  --id_cliente VAL
+  --id_empresa VAL
+  --id_estatus_proyecto VAL      1-9 o lista (ej: 1,2,3 o [1,2,3])
+  --nombre_largo VAL             busqueda parcial (LIKE)
+  --activo 0|1
+  --obra_terminada 0|1           0 = NULL o 'F' en BD; 1 = 'T' en BD
+  --tipo_listado c|r|a           c=combo, r=reducido, a=ampliado
+  --no-token                     no refrescar token (usa .token existente)
+  --no-prompt                    no preguntar interactivo; solo usa args/env
+  -h, --help                     muestra esta ayuda
+
+Tambien acepta pares directos clave=valor, ej:
+  ./cli usuario_solicitante=practicanteIt activo=1 tipo_listado=r
+
+Sin args pide los params por teclado. Enter = omitir (opcionales)
+o usar default (usuario_solicitante=practicanteIt).
+EOF
+}
+
+# ---- defaults / estado ----
+usuario_solicitante="${usuario_solicitante:-${user:-${USER_INPUT:-}}}"
+id_proyecto="${id_proyecto:-}"
+id_zona="${id_zona:-}"
+id_cliente="${id_cliente:-}"
+id_empresa="${id_empresa:-}"
+id_estatus_proyecto="${id_estatus_proyecto:-}"
+nombre_largo="${nombre_largo:-}"
+activo="${activo:-}"
+obra_terminada="${obra_terminada:-}"
+tipo_listado="${tipo_listado:-}"
+refresh_token=1
+prompt=1
+
+# ---- parse args ----
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --no-token) refresh_token=0; shift ;;
+    --no-prompt) prompt=0; shift ;;
+    --usuario_solicitante|--usuario|--user)
+      usuario_solicitante="${2:?Falta valor para $1}"; shift 2 ;;
+    --usuario_solicitante=*|--usuario=*|--user=*)
+      usuario_solicitante="${1#*=}"; shift ;;
+    --id_proyecto) id_proyecto="${2:?Falta valor para $1}"; shift 2 ;;
+    --id_proyecto=*) id_proyecto="${1#*=}"; shift ;;
+    --id_zona) id_zona="${2:?Falta valor para $1}"; shift 2 ;;
+    --id_zona=*) id_zona="${1#*=}"; shift ;;
+    --id_cliente) id_cliente="${2:?Falta valor para $1}"; shift 2 ;;
+    --id_cliente=*) id_cliente="${1#*=}"; shift ;;
+    --id_empresa) id_empresa="${2:?Falta valor para $1}"; shift 2 ;;
+    --id_empresa=*) id_empresa="${1#*=}"; shift ;;
+    --id_estatus_proyecto) id_estatus_proyecto="${2:?Falta valor para $1}"; shift 2 ;;
+    --id_estatus_proyecto=*) id_estatus_proyecto="${1#*=}"; shift ;;
+    --nombre_largo) nombre_largo="${2:?Falta valor para $1}"; shift 2 ;;
+    --nombre_largo=*) nombre_largo="${1#*=}"; shift ;;
+    --activo) activo="${2:?Falta valor para $1}"; shift 2 ;;
+    --activo=*) activo="${1#*=}"; shift ;;
+    --obra_terminada) obra_terminada="${2:?Falta valor para $1}"; shift 2 ;;
+    --obra_terminada=*) obra_terminada="${1#*=}"; shift ;;
+    --tipo_listado) tipo_listado="${2:?Falta valor para $1}"; shift 2 ;;
+    --tipo_listado=*) tipo_listado="${1#*=}"; shift ;;
+    usuario_solicitante=*|user=*) usuario_solicitante="${1#*=}"; shift ;;
+    id_proyecto=*|id_zona=*|id_cliente=*|id_empresa=*|id_estatus_proyecto=*|nombre_largo=*|activo=*|obra_terminada=*|tipo_listado=*)
+      key="${1%%=*}"; val="${1#*=}"
+      printf -v "$key" '%s' "$val"; shift ;;
+    --*) echo "Opcion desconocida: $1" >&2; usage >&2; exit 1 ;;
+    *=*) echo "Parametro desconocido: $1 (solo se permiten los 10 definidos)" >&2; exit 1 ;;
+    *) echo "Argumento desconocido: $1" >&2; usage >&2; exit 1 ;;
+  esac
+done
+
+# ---- validaciones ----
+validar_estatus() {
+  # Acepta: 5 | 1,2,3 | 1 2 3 | [1,2,3]. Normaliza a 1,2,3. Retorna 0 si ok.
+  local raw="$1" clean
+  clean="$(echo "$raw" | tr -d '[] ' | tr ',' ' ')"
+  [[ -n "$clean" ]] || return 1
+  local n
+  for n in $clean; do
+    [[ "$n" =~ ^[1-9]$ ]] || return 1
+  done
+  # normalizado con comas para la API
+  echo "$clean" | tr ' ' ','
+  return 0
+}
+
+es_01() { [[ "$1" == "0" || "$1" == "1" ]]; }
+es_tipo_listado() { [[ "$1" == "c" || "$1" == "r" || "$1" == "a" ]]; }
+
+fail() { echo "Error: $1" >&2; exit 1; }
+
+validar_todo() {
+  [[ -n "${usuario_solicitante:-}" ]] || return 1
+  if [[ -n "${id_estatus_proyecto:-}" ]]; then
+    id_estatus_proyecto="$(validar_estatus "$id_estatus_proyecto")" || return 1
+  fi
+  if [[ -n "${activo:-}" ]]; then es_01 "$activo" || return 1; fi
+  if [[ -n "${obra_terminada:-}" ]]; then es_01 "$obra_terminada" || return 1; fi
+  if [[ -n "${tipo_listado:-}" ]]; then es_tipo_listado "$tipo_listado" || return 1; fi
+  return 0
+}
+
+# ---- modo interactivo ----
+if [[ "$prompt" -eq 1 && -t 0 ]]; then
+  read -rp "usuario_solicitante [${usuario_solicitante:-practicanteIt}] (obligatorio): " _in
+  if [[ -n "${_in:-}" ]]; then usuario_solicitante="$_in";
+  elif [[ -z "${usuario_solicitante:-}" ]]; then usuario_solicitante="practicanteIt"; fi
+
+  read -rp "id_proyecto [${id_proyecto:-omitir}] (opcional): " _in
+  [[ -n "${_in:-}" ]] && id_proyecto="$_in"
+
+  read -rp "id_zona [${id_zona:-omitir}] (opcional): " _in
+  [[ -n "${_in:-}" ]] && id_zona="$_in"
+
+  read -rp "id_cliente [${id_cliente:-omitir}] (opcional): " _in
+  [[ -n "${_in:-}" ]] && id_cliente="$_in"
+
+  read -rp "id_empresa [${id_empresa:-omitir}] (opcional): " _in
+  [[ -n "${_in:-}" ]] && id_empresa="$_in"
+
+  while true; do
+    read -rp "id_estatus_proyecto [${id_estatus_proyecto:-omitir}] (1-9 o lista ej 1,2,3, opcional): " _in
+    [[ -n "${_in:-}" ]] && id_estatus_proyecto="$_in"
+    if [[ -z "${id_estatus_proyecto:-}" ]]; then break; fi
+    if norm="$(validar_estatus "$id_estatus_proyecto")"; then id_estatus_proyecto="$norm"; break; fi
+    echo "  Valor invalido. Usa 1-9 o lista como 1,2,3." >&2
+  done
+
+  read -rp "nombre_largo [${nombre_largo:-omitir}] (busqueda parcial, opcional): " _in
+  [[ -n "${_in:-}" ]] && nombre_largo="$_in"
+
+  while true; do
+    read -rp "activo [${activo:-omitir}] (0|1, opcional): " _in
+    [[ -n "${_in:-}" ]] && activo="$_in"
+    if [[ -z "${activo:-}" ]] || es_01 "$activo"; then break; fi
+    echo "  Valor invalido. Usa 0 o 1." >&2
+  done
+
+  while true; do
+    read -rp "obra_terminada [${obra_terminada:-omitir}] (0|1, opcional): " _in
+    [[ -n "${_in:-}" ]] && obra_terminada="$_in"
+    if [[ -z "${obra_terminada:-}" ]] || es_01 "$obra_terminada"; then break; fi
+    echo "  Valor invalido. Usa 0 o 1." >&2
+  done
+
+  while true; do
+    read -rp "tipo_listado [${tipo_listado:-omitir}] (c|r|a, opcional): " _in
+    [[ -n "${_in:-}" ]] && tipo_listado="$_in"
+    if [[ -z "${tipo_listado:-}" ]] || es_tipo_listado "$tipo_listado"; then break; fi
+    echo "  Valor invalido. Usa c, r o a." >&2
+  done
+else
+  # no interactivo: aplica default y valida una vez
+  usuario_solicitante="${usuario_solicitante:-practicanteIt}"
+fi
+
+[[ -n "${usuario_solicitante:-}" ]] || fail "usuario_solicitante es obligatorio (default: practicanteIt)."
+if [[ -n "${id_estatus_proyecto:-}" ]]; then
+  id_estatus_proyecto="$(validar_estatus "$id_estatus_proyecto")" \
+    || fail "id_estatus_proyecto invalido: usa 1-9 o lista (ej 1,2,3)."
+fi
+[[ -z "${activo:-}" || "$activo" == "0" || "$activo" == "1" ]] \
+  || fail "activo invalido: usa 0 o 1."
+[[ -z "${obra_terminada:-}" || "$obra_terminada" == "0" || "$obra_terminada" == "1" ]] \
+  || fail "obra_terminada invalido: usa 0 o 1."
+[[ -z "${tipo_listado:-}" || "$tipo_listado" == "c" || "$tipo_listado" == "r" || "$tipo_listado" == "a" ]] \
+  || fail "tipo_listado invalido: usa c, r o a."
+
+# ---- token ----
+if [[ "$refresh_token" -eq 1 ]]; then
+  [[ -x ./getToken ]] || chmod +x ./getToken 2>/dev/null || true
+  ./getToken
+fi
+
+# ---- arma llamada a getList ----
+[[ -x ./getList ]] || chmod +x ./getList 2>/dev/null || true
+args=("usuario_solicitante=$usuario_solicitante")
+[[ -n "${id_proyecto:-}" ]] && args+=("id_proyecto=$id_proyecto")
+[[ -n "${id_zona:-}" ]] && args+=("id_zona=$id_zona")
+[[ -n "${id_cliente:-}" ]] && args+=("id_cliente=$id_cliente")
+[[ -n "${id_empresa:-}" ]] && args+=("id_empresa=$id_empresa")
+[[ -n "${id_estatus_proyecto:-}" ]] && args+=("id_estatus_proyecto=$id_estatus_proyecto")
+[[ -n "${nombre_largo:-}" ]] && args+=("nombre_largo=$nombre_largo")
+[[ -n "${activo:-}" ]] && args+=("activo=$activo")
+[[ -n "${obra_terminada:-}" ]] && args+=("obra_terminada=$obra_terminada")
+[[ -n "${tipo_listado:-}" ]] && args+=("tipo_listado=$tipo_listado")
+
+exec ./getList "${args[@]}"
