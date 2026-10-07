@@ -1,7 +1,7 @@
 # Herramienta de consulta para api link2
 
 uso:
-```console
+```bash
 # dar permisos de ejecucion
 chmod +x cli getList getToken
 #ejecutar el cli
@@ -10,7 +10,7 @@ chmod +x cli getList getToken
 
 el cli te mostrara la siguiente pantalla para obtener los parametros deseados
 
-usuario_solicitante [practicanteIt] (obligatorio):
+usuario_solicitante [practicanteIt] (obligatorio): /n
 id_proyecto [omitir] (opcional):
 id_zona [omitir] (opcional):
 id_cliente [omitir] (opcional):
@@ -23,7 +23,7 @@ tipo_listado [omitir] (c|r|a, opcional):
 
 alternativamete se puede invocar getList de la siguiente forma
 
-```console
+```bash
 # ./getList <param=key> ej:
 ./getList tipo_listado=r
 ```
